@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+spec:
+  replicas: 4  # Начальное количество реплик для обеспечения пиковой нагрузки
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      containers:
+      - name: some-app-container
+        image: your-docker-image:latest
+        resources:
+          requests:
+            memory: "128Mi"  # Ресурсы памяти
+            cpu: "100m"       # Минимальный запрос на CPU в спокойном режиме
+          limits:
+            memory: "256Mi"  # Лимит памяти для пиковых нагрузок
+            cpu: "1"         # Лимит CPU для первых запросов (5-10 секунд инициализации)
+        ports:
+        - containerPort: 8080
+        readinessProbe:   # Пробка готовности для учёта времени инициализации
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 10  # Время на инициализацию приложения
+          periodSeconds: 5
+      affinity:
+        podAntiAffinity:   # Антиаффинитет для отказоустойчивости
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - web-app
+              topologyKey: "kubernetes.io/hostname"
+        nodeAffinity:  # Мультизональность
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values:
+                      - zone-a
+                      - zone-b
+                      - zone-c
+---
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web-app
+  minReplicas: 2  # Минимальное количество реплик ночью для экономии ресурсов
+  maxReplicas: 8  # Максимальное количество реплик в пиковое время
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50  # Целевая утилизация CPU, при которой масштабируется приложение
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web-app-pdb
+spec:
+  minAvailable: 3  # Минимальное количество работающих подов для отказоустойчивости
+  selector:
+    matchLabels:
+      app: web-app
